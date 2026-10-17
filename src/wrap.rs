@@ -114,6 +114,90 @@ fn find_wrap_point(
     wrap_point
 }
 
+/// Check if a line contains a character not preceded by a backslash
+fn contains_unescaped(line: &str, target: char) -> bool {
+    let mut prev: Option<char> = None;
+    for c in line.chars() {
+        if c == target && prev != Some('\\') {
+            return true;
+        }
+        prev = Some(c);
+    }
+    false
+}
+
+/// Check if a line is the continuation of a wrapped previous line.
+///
+/// A line counts as a continuation when appending its first unbreakable
+/// chunk to the previous line would overflow past the wrap boundary, which
+/// is exactly the condition under which [`find_wrap_point`] breaks a line
+/// at this point. Continuations are given one extra level of indentation,
+/// and because this test holds both for freshly wrapped lines and for
+/// already-wrapped lines read back from disk, the extra indent survives
+/// reformatting.
+#[must_use]
+pub fn is_wrap_continuation(
+    line: &str,
+    prev_line: &str,
+    args: &Args,
+    pattern: &Pattern,
+) -> bool {
+    // Structural lines (\begin, \end, \item, sectioning) are never
+    // wrap products.
+    if !args.wrap || pattern.contains_splitting {
+        return false;
+    }
+
+    let prev = prev_line.trim_end();
+
+    // An empty previous line, or one ending a row with \\,
+    // cannot have been wrapped here.
+    if prev.is_empty() || prev.ends_with("\\\\") {
+        return false;
+    }
+
+    // A previous line containing a comment cannot be joined with this one.
+    let mut prev_c: Option<char> = None;
+    for c in prev.chars() {
+        if c == '%' && prev_c != Some('\\') {
+            return false;
+        }
+        prev_c = Some(c);
+    }
+
+    let trimmed = line.trim_start();
+
+    // A comment line following a non-comment line is never a wrap product.
+    if trimmed.is_empty() || trimmed.starts_with('%') {
+        return false;
+    }
+
+    // Alignment rows and intertext lines start fresh lines by convention,
+    // even when the previous line is full, so they are never continuations.
+    if trimmed.starts_with("\\intertext{")
+        || trimmed.starts_with("\\shortintertext{")
+        || contains_unescaped(trimmed, '&')
+    {
+        return false;
+    }
+
+    // Measure the first unbreakable chunk of this line.
+    let mut chunk_len: usize = 0;
+    let mut pc: Option<char> = None;
+    for c in trimmed.chars() {
+        if args.wrap_chars.contains(&c) && pc != Some('\\') {
+            break;
+        }
+        chunk_len += 1;
+        pc = Some(c);
+    }
+
+    // Joining this chunk onto the previous line would overflow. The break
+    // consumed a space that trailing-space removal strips from the previous
+    // line, so the boundary case is >= rather than >.
+    prev.chars().count() + 1 + chunk_len >= args.wrapmin
+}
+
 /// Wrap a long line into a short prefix and a suffix
 pub fn apply_wrap<'a>(
     line: &'a str,

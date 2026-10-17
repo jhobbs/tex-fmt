@@ -9,7 +9,7 @@ use crate::regexes::{ENV_BEGIN, ENV_END, ITEM, RE_SPLITTING, VERBS};
 use crate::subs;
 use crate::table::{format_tables, is_inside_table, Table};
 use crate::verbatim::{get_verbatim, Verbatim};
-use crate::wrap::{apply_wrap, needs_wrap};
+use crate::wrap::{apply_wrap, is_wrap_continuation, needs_wrap};
 use crate::write::process_output;
 use crate::LINE_END;
 use log::Level::{Info, Warn};
@@ -38,6 +38,7 @@ pub fn format_file(
     let mut state = State::new();
     let mut queue: Vec<(usize, String)> = vec![];
     let mut new_text = String::with_capacity(2 * old_text.len());
+    let mut prev_line = String::new();
 
     // Select the character used for indentation.
     let indent_char = match args.tabchar {
@@ -87,7 +88,7 @@ pub fn format_file(
 
                 // Calculate the indent based on the current state
                 // and the patterns in the line.
-                let indent = calculate_indent(
+                let mut indent = calculate_indent(
                     &line,
                     &mut temp_state,
                     logs,
@@ -135,6 +136,13 @@ pub fn format_file(
                 }
 
                 // Lastly, apply the indent if the line didn't need wrapping.
+                // Continuations of wrapped lines get one extra level so the
+                // wrap is visually evident. The extra indent is applied after
+                // the wrapping decisions above, so wrap points never depend
+                // on it and the output is stable under reformatting.
+                if is_wrap_continuation(&line, &prev_line, args, &pattern) {
+                    indent.visual += 1;
+                }
                 line = apply_indent(&line, &indent, args, indent_char);
             }
 
@@ -142,6 +150,7 @@ pub fn format_file(
             state = temp_state;
             new_text.push_str(&line);
             new_text.push_str(LINE_END);
+            prev_line = line;
             state.linum_new += 1;
         } else if let Some((linum_old, line)) = old_lines.next() {
             queue.push((linum_old, line.to_string()));
